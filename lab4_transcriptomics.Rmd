@@ -5,3 +5,53 @@ date: "2025-09-25"
 output: html_document
 ---
 
+```{r upload_packages, message=FALSE, warning=FALSE}
+BiocManager::install("clusterProfiler")
+BiocManager::install("EnhancedVolcano")
+#Note, if biomaRt isn't installed on your machine for some reason, you should install it as well. 
+
+lapply(c(
+  "docopt", "DT", "pheatmap","GenomicFeatures", "DESeq2",
+  "edgeR", "systemPipeR", "systemPipeRdata", "BiocStyle", "GO.db", "dplyr",
+  "tidyr", "stringr", "Rqc", "QuasR", "DT", "ape", "clusterProfiler","biomaRt","EnhancedVolcano"
+),require, character.only = TRUE) 
+```
+# Q1: Change the path name and metadata table output
+
+```{r, message=FALSE, warning=FALSE}
+# Load required libraries
+library(systemPipeRdata)
+library(DT)
+
+fq_path <- systemPipeRdata::pathList()$fastqdir
+
+meta_data <- read.table(
+  system.file("extdata", "param", "targetsPE.txt", package = "systemPipeRdata"),
+  header = TRUE
+)
+
+head(meta_data)
+
+meta_data$FileName1 <- file.path(fq_path, basename(meta_data$FileName1))
+meta_data$FileName2 <- file.path(fq_path, basename(meta_data$FileName2))
+
+DT::datatable(meta_data, options = list(pageLength = 10))
+```
+
+# Q2: Quality check
+
+```{r quality_check, message=FALSE, warning=FALSE}
+
+fastq_files <- c(meta_data$FileName1, meta_data$FileName2)
+rqc_result <- Rqc::rqc(path = fq_path, pattern = ".fastq.gz")
+
+rqcCycleQualityBoxPlot(rqc_result[1:12]) + theme_bw()
+rqcCycleQualityBoxPlot(rqc_result[13:24]) + theme_bw()
+rqcCycleQualityBoxPlot(rqc_result[25:36]) + theme_bw()
+
+rqcCycleBaseCallsPlot(rqc_result[1:12]) + theme_bw()
+rqcCycleBaseCallsPlot(rqc_result[13:24]) + theme_bw()
+rqcCycleBaseCallsPlot(rqc_result[25:36]) + theme_bw()
+```
+
+# Q3. 
