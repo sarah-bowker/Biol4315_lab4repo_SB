@@ -54,4 +54,39 @@ rqcCycleBaseCallsPlot(rqc_result[13:24]) + theme_bw()
 rqcCycleBaseCallsPlot(rqc_result[25:36]) + theme_bw()
 ```
 
-# Q3. 
+# Q3. Process Reads
+```{r process_reads, message=FALSE, warning=FALSE}
+process_reads <- function(fwd_file_path) {
+  fq <- readFastq(fwd_file_path)
+  adapter_seq <- "GCCCGGGTAA"
+  
+  # Trim adapter sequence from 3' end
+  fq_trimmed <- trimLRPatterns(Rpattern = adapter_seq, subject = fq)
+  
+  # Trim last 3 bases from 3' end
+  width_trimmed <- width(fq_trimmed) - 3
+  fq_trimmed <- narrow(fq_trimmed, start=1, end=width_trimmed)
+  
+  # Filter out reads with more than 1 'N'
+  seqs <- sread(fq_trimmed)
+  n_count <- vcountPattern("N", seqs)
+  fq_filtered <- fq_trimmed[n_count <= 1]
+  
+  # Prepare output filename
+  base_name <- tools::file_path_sans_ext(basename(fwd_file_path))
+  out_file <- file.path("processed_reads", paste0(base_name, "_processed.fastq"))
+  
+  # Write filtered fastq
+  writeFastq(fq_filtered, out_file, compress = FALSE, mode = "a")
+  
+  return(out_file)
+}
+
+
+if (!dir.exists("processed_reads")) dir.create("processed_reads")
+for (i in seq_len(nrow(meta_data))) {
+  old_path <- meta_data$FileName1[i]
+  new_path <- process_reads(old_path)
+  meta_data$FileName1[i] <- new_path  # Update metadata with processed file path
+}
+```
