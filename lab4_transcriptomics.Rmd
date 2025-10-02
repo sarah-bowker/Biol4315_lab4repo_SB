@@ -60,23 +60,18 @@ process_reads <- function(fwd_file_path) {
   fq <- readFastq(fwd_file_path)
   adapter_seq <- "GCCCGGGTAA"
   
-  # Trim adapter sequence from 3' end
   fq_trimmed <- trimLRPatterns(Rpattern = adapter_seq, subject = fq)
   
-  # Trim last 3 bases from 3' end
   width_trimmed <- width(fq_trimmed) - 3
   fq_trimmed <- narrow(fq_trimmed, start=1, end=width_trimmed)
   
-  # Filter out reads with more than 1 'N'
   seqs <- sread(fq_trimmed)
   n_count <- vcountPattern("N", seqs)
   fq_filtered <- fq_trimmed[n_count <= 1]
   
-  # Prepare output filename
   base_name <- tools::file_path_sans_ext(basename(fwd_file_path))
   out_file <- file.path("processed_reads", paste0(base_name, "_processed.fastq"))
   
-  # Write filtered fastq
   writeFastq(fq_filtered, out_file, compress = FALSE, mode = "a")
   
   return(out_file)
@@ -87,6 +82,90 @@ if (!dir.exists("processed_reads")) dir.create("processed_reads")
 for (i in seq_len(nrow(meta_data))) {
   old_path <- meta_data$FileName1[i]
   new_path <- process_reads(old_path)
-  meta_data$FileName1[i] <- new_path  # Update metadata with processed file path
+  meta_data$FileName1[i] <- new_path
 }
+```
+
+# Q4. Align the reads
+```{r align_reads, message=FALSE, warning=FALSE}
+hisat2_index <- "/Users/sbowker00/Biol4315_lab4repo_SB/hisat2_index/tair10_1_index"
+
+for(i in seq_len(nrow(meta_data))){
+  sample_name <- meta_data$SampleName[i]
+  fastq_file <- meta_data$FileName1[i]
+  
+  
+  # Create output file paths
+  sam_file <- file.path("sam_files", paste0(sample_name, ".sam"))
+  bam_file <- file.path("bam_files", paste0(sample_name, ".bam"))
+  sorted_bam_file <- file.path("bam_files", paste0(sample_name, "_sorted.bam"))
+  log_file <- file.path("bam_files", paste0(sample_name, "_hisat2.log"))
+  
+  if (!file.exists(fastq_file)) {
+    message("Skipping ", sample_name, ": FASTQ not found - ", fastq_file)
+    next
+  }
+  
+  # Run HISAT2
+  hisat2_log <- tryCatch({
+    system2("hisat2", args = c("-x", hisat2_index,
+                               "-U", fastq_file,
+                               "-p", "8",
+                               "-S", sam_file),
+            stdout = TRUE, stderr = TRUE)
+  }, error = function(e) paste("hisat2 failed:", e$message))
+  
+  writeLines(hisat2_log, log_file)
+  
+  # Run samtools
+  tryCatch({
+    system2("samtools", args = c("view", "-bS", sam_file, "-o", bam_file), stdout = TRUE, stderr = TRUE)
+    system2("samtools", args = c("sort", "-o", sorted_bam_file, bam_file), stdout = TRUE, stderr = TRUE)
+    system2("samtools", args = c("index", sorted_bam_file), stdout = TRUE, stderr = TRUE)
+  }, error = function(e) {
+    message("samtools failed for ", sample_name, ": ", e$message)
+  })
+}
+```
+
+
+# 5. Alignment stats
+```{r read_alignment_stat, message=FALSE, warning=FALSE}
+# get the folder
+hisat2_logs_dir <- "./bam_files"
+
+# 1. Get a list of all HISAT2 log files
+log_files <- list.files(hisat2_logs_dir, pattern = "_hisat2\\.log$", full.names = TRUE)
+
+#preper an "empty" vector of the apropreate size, faster than appending. 
+percent_aligned <- 1:length(log_files)
+
+#loop through log files
+for (i in seq_along(percent_aligned)) {
+  
+  percent_aligned[i] <- readLines(log_files[i])[length(readLines(log_files[i]))]
+  
+}
+
+#bind vectors as dataframe
+align_df <- data.frame(sort(meta_data$SampleName),percent_aligned)
+
+# extract the numeric percent value
+align_df <- align_df %>% 
+  mutate(percent_aligned = as.numeric(
+    stringr::str_split_i(align_df$percent_aligned, "%",1))) %>% 
+  rename(samplename = sort.meta_data.SampleName.)
+
+DT::datatable(align_df, 
+              colnames = c("Sample Name", "Percent Aligned"), 
+              options = list(pageLength = 10, autoWidth = TRUE))
+
+ggplot(align_df, aes(x = "", y = percent_aligned)) + 
+  geom_boxplot(fill = "pink", color = "darkblue") + 
+  labs(title = "Distribution of Alignment Percentages",
+       y = "Percent Aligned (%)",
+       x = "") +
+  theme_minimal() +
+  theme(axis.text.x = element_blank())
+
 ```
