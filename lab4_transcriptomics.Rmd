@@ -169,3 +169,37 @@ ggplot(align_df, aes(x = "", y = percent_aligned)) +
   theme(axis.text.x = element_blank())
 
 ```
+
+# 6. Count table
+```{r creat_count_table, message=FALSE, warning=FALSE}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+BiocManager::install("Rsubread")
+library("Rsubread")
+
+bfiles <- list.files("./bam_files", pattern = "_sorted.bam$", full.names = TRUE)
+
+#Counting how many reads corespond to each gene
+gene_count_list <- Rsubread::featureCounts(files = bfiles, annot.ext = "GCF_000001735.4_TAIR10.1_genomic.gtf", 
+                                           isGTFAnnotationFile = TRUE, # <--- input annotation is GTF
+                                           allowMultiOverlap = FALSE,  # <--- don't allow reads that overlap with multiple loci
+                                           isPairedEnd = FALSE, nthreads = 8,
+                                           minMQS = 10, # <--- minimum mapping quality score of 10 (like a phred score for the hisat2 alignment)
+                                           GTF.featureType = "exon",  # <--- Count reads overlapping 'exon' features
+                                           GTF.attrType = "gene_id" # <--- Groups exon by gene id
+)
+
+# Assigns $count to a variable named count_table.
+count_table <- gene_count_list$counts
+
+# Removes the _sort.bam from the column names
+colnames(count_table) <- gsub("_sorted\\.bam$", "", colnames(count_table))
+
+# Filter out genes with no reads mapped to them across all samples
+count_table <- count_table[rowSums(count_table) > 0, ]
+
+# Uses DT to output the variable an interactive table
+DT::datatable(count_table,
+              options = list(pageLength = 10, autoWidth = TRUE),
+              caption = "Filtered Count Table")
+```
