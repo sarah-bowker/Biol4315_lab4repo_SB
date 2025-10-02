@@ -7,3 +7,6 @@
 .GCF_000001735.4_TAIR10.1_genomic.gtf.gz
 .GCF_000001735.4_TAIR10.1_genomic.gtf
 .processed_reads/
+.hisat2_index/
+.sam_files
+.bam_files

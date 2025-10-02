@@ -16,7 +16,7 @@ lapply(c(
   "tidyr", "stringr", "Rqc", "QuasR", "DT", "ape", "clusterProfiler","biomaRt","EnhancedVolcano"
 ),require, character.only = TRUE) 
 ```
-# Q1: Change the path name and metadata table output
+# Q1. Change the path name and metadata table output
 
 ```{r, message=FALSE, warning=FALSE}
 # Load required libraries
@@ -38,7 +38,7 @@ meta_data$FileName2 <- file.path(fq_path, basename(meta_data$FileName2))
 DT::datatable(meta_data, options = list(pageLength = 10))
 ```
 
-# Q2: Quality check
+# Q2. Quality check
 
 ```{r quality_check, message=FALSE, warning=FALSE}
 
@@ -129,7 +129,7 @@ for(i in seq_len(nrow(meta_data))){
 ```
 
 
-# 5. Alignment stats
+# Q5. Alignment stats
 ```{r read_alignment_stat, message=FALSE, warning=FALSE}
 # get the folder
 hisat2_logs_dir <- "./bam_files"
@@ -170,7 +170,7 @@ ggplot(align_df, aes(x = "", y = percent_aligned)) +
 
 ```
 
-# 6. Count table
+# Q6. Count table
 ```{r creat_count_table, message=FALSE, warning=FALSE}
 if (!requireNamespace("BiocManager", quietly = TRUE))
   install.packages("BiocManager")
@@ -202,4 +202,175 @@ count_table <- count_table[rowSums(count_table) > 0, ]
 DT::datatable(count_table,
               options = list(pageLength = 10, autoWidth = TRUE),
               caption = "Filtered Count Table")
+```
+
+# Q7. Analysis
+```{r dd2_analysis, message=FALSE, warning=FALSE}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+BiocManager::install("DESeq2")
+library("DESeq2")
+BiocManager::install("SummarizedExperiment")
+library("SummarizedExperiment")
+library(ape)
+
+#Get the metadata table that would accompany the count table
+coldata <- meta_data %>% dplyr::select(SampleName,SampleLong,Factor) %>% 
+  dplyr::mutate(SampleLong=str_split_i(SampleLong, "\\.",1)) %>% #getting the groups name (Avirulent, Mock and Virulent)
+  dplyr::rename(condition = SampleLong) %>%
+  dplyr::mutate(condition = factor(condition)) %>% #for group comp
+  dplyr::mutate(Factor = factor(Factor)) #for sample comp
+
+base::rownames(coldata) <- coldata$SampleName
+coldata <- coldata %>% mutate(SampleName = factor(SampleName))
+coldata$type <- factor(rep("single-read", nrow(coldata)))
+
+#Make sure samples are in the same order between the two. 
+coldata <- coldata[base::match(base::colnames(count_table), rownames(coldata)),]
+#Check that they are indeed same order
+all(rownames(coldata) == base::colnames(count_table))
+
+dds1 <- DESeq2::DESeqDataSetFromMatrix(countData = count_table,
+                               colData = coldata,
+                               design = ~ condition)
+#creating a dds object where the conditions are the samples themslevs 
+dds2 <- DESeq2::DESeqDataSetFromMatrix(countData = count_table,
+                               colData = coldata,
+                               design = ~ Factor)
+
+#correlating the samples
+d <- cor(SummarizedExperiment::assay(DESeq2::rlog(dds1)), method = "spearman")
+#turning correlation to a distance (1 - correlation) and clustring
+hc <- hclust(dist(1 - d))
+
+#hirarchal clustering
+plot.phylo(as.phylo(hc), type = "p", edge.col = "blue", edge.width = 2,
+           show.node.label = TRUE, no.margin = TRUE)
+
+dds1_results <- DESeq2::DESeq(dds1)
+dds2_results <- DESeq2::DESeq(dds2)
+res1 <- DESeq2::results(dds1_results)
+res1
+
+res2 <- DESeq2::results(dds2_results)
+res2
+
+dds2
+
+res_vir_mock <- DESeq2::results(dds1_results, contrast = c("condition", "Vir", "Mock"), alpha = 0.2)
+
+# Avr vs Mock  
+res_avr_mock <- DESeq2::results(dds1_results, contrast = c("condition", "Avr", "Mock"), alpha = 0.2)
+
+# Vir vs Avr
+res_vir_avr <- DESeq2::results(dds1_results, contrast = c("condition", "Vir", "Avr"), alpha = 0.2)
+
+# Function to filter and count DE genes
+filter_and_count <- function(res_obj, comparison_name, fc_threshold = 2) {
+  # Remove NAs
+  res_filtered <- res_obj[!is.na(res_obj$padj) & !is.na(res_obj$log2FoldChange), ]
+  
+  # Apply filters: |log2FC| >= log2(2) = 1 and padj <= alpha (already set in results())
+  sig_genes <- res_filtered[abs(res_filtered$log2FoldChange) >= log2(fc_threshold), ]
+  
+  # Count up and down regulated
+  up_regulated <- sum(sig_genes$log2FoldChange > 0)
+  down_regulated <- sum(sig_genes$log2FoldChange < 0)
+  
+  return(data.frame(
+    Comparison = comparison_name,
+    Up_regulated = up_regulated,
+    Down_regulated = down_regulated
+  ))
+}
+
+# Apply filtering and counting to all comparisons
+results_summary <- rbind(
+  filter_and_count(res_vir_mock, "Vir vs Mock"),
+  filter_and_count(res_avr_mock, "Avr vs Mock"),
+  filter_and_count(res_vir_avr, "Vir vs Avr")
+)
+
+# Print summary
+print("Summary of DE genes (FC >= 2, alpha = 0.2):")
+print(results_summary)
+
+
+plot_data <- results_summary %>%
+  pivot_longer(cols = c(Up_regulated, Down_regulated), 
+               names_to = "Regulation", 
+               values_to = "Count") %>%
+  mutate(Regulation = factor(Regulation, levels = c("Up_regulated", "Down_regulated")))
+
+# Create horizontal stacked bar plot
+p <- ggplot(plot_data, aes(x = Comparison, y = Count, fill = Regulation)) +
+  geom_bar(stat = "identity", position = "stack") +
+  coord_flip() +  # Makes it horizontal
+  labs(
+    title = "Differentially Expressed Genes by Comparison",
+    subtitle = "Fold Change >= 2, alpha = 0.2",
+    x = "Comparison",
+    y = "Number of Genes",
+    fill = "Regulation"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5, size = 12),
+    axis.text = element_text(size = 10),
+    axis.title = element_text(size = 12),
+    legend.title = element_text(size = 11),
+    legend.text = element_text(size = 10))
+p
+
+
+# dd2 analysis
+comp <- systemPipeR::readComp("/Users/sbowker00/Library/R/arm64/4.4/library/systemPipeRdata/extdata/param/targetsPE.txt")
+comp[[1]]
+pairs_comp <- comp[[1]]
+pairs_comp
+results_list <- list()
+for (pair in pairs_comp) {
+  groups <- unlist(strsplit(pair, "-"))
+  gr1 <- groups[1]
+  gr2 <- groups[2]
+  name_comp <- paste(gr1, "vs", gr2)
+  res <- DESeq2::results(dds2_results, contrast = c("Factor", gr1, gr2), alpha = 0.2)
+  filtered_data <- filter_and_count(res, name_comp)
+  results_list[[name_comp]] <- filtered_data
+}
+
+results_summary_2 <- do.call(rbind, results_list)
+
+plot_data_2 <- results_summary_2 %>%
+  pivot_longer(cols = c(Up_regulated, Down_regulated),
+               names_to = "Regulation",
+               values_to = "Count") %>%
+  mutate(Regulation = factor(Regulation, levels = c("Up_regulated", "Down_regulated")))
+
+p_2 <- ggplot(plot_data_2, aes(x = Comparison, y = Count, fill = Regulation)) +
+  geom_bar(stat = "identity", position = "stack") +
+  coord_flip() +
+  labs(
+    title = "Differentially Expressed Genes by Sample Comparison dd2",
+    subtitle = "Fold Change >= 2,, alpha = 0.2",
+    x = "Comparison",
+    y = "Number of Genes",
+    fill = "Regulation"
+  ) +
+  theme_minimal() +
+theme(
+  plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+  plot.subtitle = element_text(hjust = 0.5, size = 12),
+  axis.text = element_text(size = 10),
+  axis.title = element_text(size = 12),
+  legend.title = element_text(size = 11),
+  legend.text = element_text(size = 10))
+
+p_2
+```
+
+# Q8. Spearman correlation analysis vs Clustered heatmap based on significant DEGs
+```{r , eval=FALSE}
+# In the Spearman correlation, we used all genes, and the samples didn’t separate clearly by treatment, suggesting that most genes are not strongly affected by the pathogen. In contrast, clustering based on differentially expressed genes (DEGs) showed that samples grouped much more clearly by treatment, with virulent, avirulent, and mock-treated samples forming more distinct clusters.This makes sense biologically, as DEGs highlight the genes that actually respond to infection, giving a clearer view of how Arabidopsis reacts to different pathogens.
 ```
